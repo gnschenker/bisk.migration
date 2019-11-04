@@ -1,0 +1,65 @@
+version: "2.4"
+services:
+  rabbitmq:
+    image: rabbitmq:3.8.0-management-alpine
+    hostname: rabbitmq
+    ports:
+      - 5672:5672
+      - 15672:15672
+    network_mode: host
+    healthcheck:
+      test: nc -z localhost 5672 || exit -1
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  migration:
+    image: acme/migration:1.0
+    build: migration
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      BOAS_API_URL: http://localhost:5000
+    network_mode: host
+    volumes:
+      - ./migration:/app
+    healthcheck:
+      test: /app/healthcheck.sh
+      interval: 5s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    command: dotnet watch run
+
+  unittests:
+    image: acme/migration-unittests:1.0
+    build: 
+      context: .
+      dockerfile: unittests/Dockerfile
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      BOAS_API_URL: http://localhost:5000
+    volumes:
+      - ./migration:/app/migration
+      - ./unittests:/app/unittests
+    network_mode: host
+    command: dotnet watch --project unittests/unittests.csproj test
+
+  integrationtests:
+    image: acme/migration-integrationtests:1.0
+    build: integrationtests
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migration:
+        condition: service_healthy
+    environment:
+      BOAS_API_URL: http://localhost:5000
+    volumes:
+      - ./integrationtests:/app
+    network_mode: host
+    command: dotnet watch test

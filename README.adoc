@@ -1,0 +1,94 @@
+= Developing and Testing a Microservice
+
+== The microservice solution structure
+It is a goal to create a (Git) repo per microservice. Since some or all microservices need to share some code we will create Nuget packages containing the code to share. It is recommended to work with a local Nuget repo during development.
+
+The proposed solution structure is as follows
+
+[source]
+--
+-- <solution-folder>
+    |-- <microservice-folder> <1>
+    |-- unitests <2>
+    |-- integrationtests <3>
+    docker-compose-dev.yml <4>
+    README.adoc <5>
+
+<1> Contains the code & Dockerfile for the actual microservice
+<2> Contains unit tests for the microservice & Dockerfile
+<3> Contains integration tests for the microservice & Dockerfile
+<4> The Docker compose file used during development
+<5> Readme describing this microservice
+--
+
+== Running the Environment
+
+We will run the application code and the tests containerized. The Unit Test code is in the same container as the application code whilst the integration test code tests the public API of the microservice. In the case of this Migration Manager microservice, the public API is messages received via message bus.
+
+. Navigate to the solution folder (the folder containing the file `docker-compose-dev.yml`)
+. Run the environment with:
++
+[source]
+--
+docker-compose -f docker-compose-dev-yml up -d --build
+--
++
+NOTE: the `--build` parameter makes sure that the respective Docker images are rebuilt. Otherwise Docker Compose uses the cached images (no matter whether you changed code or not).
+
+. Open two terminal windows and navigate to the solution folder
+. In the first window follow the logs for the `unittests` container:
++
+[source]
+--
+docker-compose -f docker-compose-dev.yml unittests
+--
++
+Please observe how the unit tests are re-run each time some application or test code changes.
+
+. In the other window follow the logs for the `integrationtests` container:
++
+[source]
+--
+docker-compose -f docker-compose-dev.yml integrationtests
+--
++
+Please observe how the integration tests are re-run each time some test code changes.
+
+. Start coding...
+
+TIP: Please note the health check we are using for the migration container. The check probes for the existence of a file. The microservice will generate that file when it is initialized.
+
+== Unit tests
+
+We are using `NUnit` as the test framework and `WireMock.Net` to stub and mock (instrument) the external RESTful API the `migration` microservice is calling.
+
+To concentrate on the business logic of the `migration` microservice we have created a `IMessageHandler<TMessage>` abstraction. The logic is then for each type of message in a specific implementation of said interface. This corresponds to the *strategy pattern* approach.
+
+== Integration tests
+
+We are using `NUnit` as the test framework and `WireMock.Net` to stub and mock (instrument) the external RESTful API the `migration` microservice is calling. We could also use `XUnit` instead, but would have to take special care about starting and stopping the `WireMock` server since `XUnit` does not provide setup and teardown functions out of the box.
+
+Integration tests are external to the migration microservice and can only interact with it via its public interface(s). Thus the tests send a message on the message bus to trigger an action on the microservice. The test then asserts that the microservice has executed the expected call to the BOAS API.
+
+Since everything is asychronous, special care has to be taken on the assertion side of the tests. We are using a special *constraint* when we assert an assumption. The constraint uses polling until the assertion turns true. We set the max polling time in our sample code to 5000 ms (5 sec).
+
+== The use of Nuget packages
+To follow clean code and to avoid duplication we share code between different microservices. There are two types of code that needs to be shared:
+
+- domain or application logic: this is code that is shared between microservices that interact with each other. This is mostly *Domain Events*
+
+- infrastructure logic: this is code that abstracts the actual infrastructure for the application. In our case this is the messaging infrastructure
+
+We create Nuget packages for both concerns. The former is called `bisk.messages` and the latter `bisk.messaging`. During the development time those Nuget packages will probably reside on a local Nuget repository of the developer. From there the packages should be added to the microservice or test projects using the `--source` parameter, e.g.:
+
+[source]
+--
+dotnet add package bisk.messages \
+    --source <path to local nuget repo> \
+    --package-directory packages
+--
+
+Where `<path to local nuget repo>` corresponds to the full path to your local Nuget repo, e.g. `d:\\nuget_repo`. +
+The parameter `--package-directory` is responsible to install those packages into the `packages` folder inside the project folder. From there is will be picked up during the Docker image build process (have a look e.g. into the `Dockerfile` of the `migration` microservice)
+
+NOTE: the above `add package` command will add all dependent Nuget packages into the `packages` folder too. To save space one can easily remove all folders except the `bisk.messages` folder. The Docker build command will then restore those dependent Nuget packages either from the global Nuget cache or from the web.
